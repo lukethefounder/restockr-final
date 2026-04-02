@@ -1,0 +1,347 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrganizationType {
+  BUYER
+  DISTRIBUTOR
+  FOUNDER
+}
+
+enum UserRole {
+  FOUNDER
+  FOUNDER_ADMIN
+  BUYER_ADMIN
+  BUYER_STAFF
+  DISTRIBUTOR_ADMIN
+  DISTRIBUTOR_STAFF
+}
+
+enum MinimumOrderType {
+  NONE
+  MOQ
+  MIN_SPEND
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_SUBMISSION
+  SUBMITTED
+  CONFIRMED
+  INVOICED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  DISPUTED
+  VOID
+}
+
+enum VerificationStatus {
+  NOT_SENT
+  MOCK_VERIFIED
+  VERIFIED
+  FAILED
+}
+
+enum ReferralStatus {
+  PENDING
+  ACTIVATED
+  REWARDED
+  EXPIRED
+}
+
+model BillingPlan {
+  id           String         @id @default(cuid())
+  name         String
+  monthlyPrice Decimal        @db.Decimal(10, 2)
+  annualPrice  Decimal?       @db.Decimal(10, 2)
+  isActive     Boolean        @default(true)
+  organizations Organization[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model Organization {
+  id                  String                @id @default(cuid())
+  name                String
+  slug                String                @unique
+  type                OrganizationType
+  referralCode        String?               @unique
+  billingPlanId       String?
+  ownerUserId         String?
+  billingPlan         BillingPlan?          @relation(fields: [billingPlanId], references: [id], onDelete: SetNull)
+  ownerUser           User?                 @relation("OrganizationOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  users               User[]                @relation("OrganizationMembers")
+  locations           Location[]
+  distributorProfile  DistributorProfile?
+  buyerProfile        BuyerProfile?
+  products            Product[]
+  buyerOrders         Order[]               @relation("BuyerOrders")
+  distributorLines    OrderLine[]           @relation("DistributorOrderLines")
+  invoicesAsBuyer     Invoice[]             @relation("InvoicesAsBuyer")
+  invoicesAsDistributor Invoice[]           @relation("InvoicesAsDistributor")
+  referralsSent       ReferralLedger[]      @relation("ReferralSender")
+  referralsReceived   ReferralLedger[]      @relation("ReferralReceiver")
+  buyerPreferences    BuyerItemPreference[] @relation("PreferenceBuyerOrg")
+  preferredForItems   BuyerItemPreference[] @relation("PreferenceDistributorOrg")
+  budActions          BudActionLog[]
+  subscription        Subscription?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+}
+
+model User {
+  id                String        @id @default(cuid())
+  email             String        @unique
+  fullName          String
+  role              UserRole
+  authProviderId    String?
+  organizationId    String?
+  defaultLocationId String?
+  organization      Organization? @relation("OrganizationMembers", fields: [organizationId], references: [id], onDelete: SetNull)
+  defaultLocation   Location?     @relation("DefaultLocation", fields: [defaultLocationId], references: [id], onDelete: SetNull)
+  ownedOrganizations Organization[] @relation("OrganizationOwner")
+  submittedOrders   Order[]       @relation("SubmittedOrders")
+  createdLists      CustomList[]  @relation("ListCreator")
+  budActions        BudActionLog[] @relation("BudActionUser")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
+model Location {
+  id               String               @id @default(cuid())
+  organizationId   String
+  name             String
+  address          String?
+  timezone         String               @default("America/Phoenix")
+  isActive         Boolean              @default(true)
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  usersWithDefault User[]               @relation("DefaultLocation")
+  customLists      CustomList[]
+  orders           Order[]
+  buyerPreferences BuyerItemPreference[]
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@index([organizationId])
+}
+
+model DistributorProfile {
+  organizationId       String           @id
+  minimumOrderType     MinimumOrderType @default(NONE)
+  minimumOrderQuantity Int?
+  minimumOrderSpend    Decimal?         @db.Decimal(10, 2)
+  leadTimeDays         Int?
+  paymentTerms         String?
+  fulfillmentNotes     String?
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model BuyerProfile {
+  organizationId            String       @id
+  invoiceEmail              String?
+  notificationPreferences   Json?
+  purchasingRules           Json?
+  preferredDistributors     Json?
+  organization              Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model Product {
+  id                 String                 @id @default(cuid())
+  distributorOrgId   String
+  sku                String?
+  name               String
+  normalizedName     String
+  category           String?
+  unit               String?
+  packSize           Decimal?               @db.Decimal(10, 2)
+  basePrice          Decimal?               @db.Decimal(10, 2)
+  isActive           Boolean                @default(true)
+  distributorOrg     Organization           @relation(fields: [distributorOrgId], references: [id], onDelete: Cascade)
+  priceSnapshots     ProductPriceSnapshot[]
+  orderLines         OrderLine[]
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([distributorOrgId])
+  @@index([normalizedName])
+}
+
+model ProductPriceSnapshot {
+  id               String       @id @default(cuid())
+  productId        String
+  distributorOrgId String
+  effectiveDate    DateTime
+  price            Decimal      @db.Decimal(10, 2)
+  source           String?
+  product          Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt        DateTime     @default(now())
+
+  @@index([productId, effectiveDate])
+}
+
+model BuyerItemPreference {
+  id                    String        @id @default(cuid())
+  buyerOrgId            String
+  buyerLocationId       String
+  preferredDistributorId String
+  normalizedItemName    String
+  displayName           String
+  hardLockPreference    Boolean       @default(false)
+  notes                 String?
+  buyerOrg              Organization  @relation("PreferenceBuyerOrg", fields: [buyerOrgId], references: [id], onDelete: Cascade)
+  buyerLocation         Location      @relation(fields: [buyerLocationId], references: [id], onDelete: Cascade)
+  preferredDistributor  Organization  @relation("PreferenceDistributorOrg", fields: [preferredDistributorId], references: [id], onDelete: Restrict)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@unique([buyerLocationId, normalizedItemName])
+}
+
+model CustomList {
+  id             String           @id @default(cuid())
+  buyerLocationId String
+  name           String
+  description    String?
+  createdById    String?
+  buyerLocation  Location         @relation(fields: [buyerLocationId], references: [id], onDelete: Cascade)
+  createdBy      User?            @relation("ListCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  items          CustomListItem[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+}
+
+model CustomListItem {
+  id                    String      @id @default(cuid())
+  customListId          String
+  normalizedItemName    String
+  displayName           String
+  category              String?
+  targetPar             Decimal?    @db.Decimal(10, 2)
+  defaultQuantity       Decimal?    @db.Decimal(10, 2)
+  preferredDistributorId String?
+  isRequired            Boolean     @default(false)
+  notes                 String?
+  customList            CustomList  @relation(fields: [customListId], references: [id], onDelete: Cascade)
+
+  @@index([customListId])
+}
+
+model Order {
+  id                 String      @id @default(cuid())
+  buyerOrgId         String
+  buyerLocationId    String
+  submittedById      String?
+  status             OrderStatus @default(DRAFT)
+  optimizationMode   String      @default("BALANCED")
+  deliveryDate       DateTime?
+  notes              String?
+  totalCost          Decimal?    @db.Decimal(10, 2)
+  bestPriceBenchmark Decimal?    @db.Decimal(10, 2)
+  estimatedSavings   Decimal?    @db.Decimal(10, 2)
+  buyerOrg           Organization @relation("BuyerOrders", fields: [buyerOrgId], references: [id], onDelete: Restrict)
+  buyerLocation      Location    @relation(fields: [buyerLocationId], references: [id], onDelete: Restrict)
+  submittedBy        User?       @relation("SubmittedOrders", fields: [submittedById], references: [id], onDelete: SetNull)
+  lines              OrderLine[]
+  invoice            Invoice?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@index([buyerOrgId, status])
+}
+
+model OrderLine {
+  id                               String       @id @default(cuid())
+  orderId                          String
+  distributorOrgId                 String
+  productId                        String?
+  requestedItemName                String
+  normalizedItemName               String
+  finalQuantity                    Decimal      @db.Decimal(10, 2)
+  finalUnitPrice                   Decimal      @db.Decimal(10, 2)
+  lineSubtotal                     Decimal      @db.Decimal(10, 2)
+  buyerRequestedSpecificDistributor Boolean     @default(false)
+  wasOptimized                     Boolean      @default(true)
+  order                            Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  distributorOrg                   Organization @relation("DistributorOrderLines", fields: [distributorOrgId], references: [id], onDelete: Restrict)
+  product                          Product?     @relation(fields: [productId], references: [id], onDelete: SetNull)
+  createdAt                        DateTime     @default(now())
+
+  @@index([orderId])
+  @@index([distributorOrgId])
+}
+
+model Invoice {
+  id                  String             @id @default(cuid())
+  orderId             String             @unique
+  invoiceNumber       String             @unique
+  distributorOrgId    String
+  buyerOrgId          String
+  amountSubtotal      Decimal            @db.Decimal(10, 2)
+  amountTax           Decimal            @db.Decimal(10, 2)
+  amountTotal         Decimal            @db.Decimal(10, 2)
+  paymentStatus       PaymentStatus      @default(PENDING)
+  fileUrl             String?
+  mintsyHash          String?
+  mintsyTxId          String?
+  verificationStatus  VerificationStatus @default(NOT_SENT)
+  order               Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  distributorOrg      Organization       @relation("InvoicesAsDistributor", fields: [distributorOrgId], references: [id], onDelete: Restrict)
+  buyerOrg            Organization       @relation("InvoicesAsBuyer", fields: [buyerOrgId], references: [id], onDelete: Restrict)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+}
+
+model ReferralLedger {
+  id             String         @id @default(cuid())
+  referringOrgId String
+  referredEmail  String
+  referredOrgId  String?
+  status         ReferralStatus @default(PENDING)
+  rewardType     String?
+  rewardValue    Decimal?       @db.Decimal(10, 2)
+  referringOrg   Organization   @relation("ReferralSender", fields: [referringOrgId], references: [id], onDelete: Cascade)
+  referredOrg    Organization?  @relation("ReferralReceiver", fields: [referredOrgId], references: [id], onDelete: SetNull)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([referringOrgId, status])
+}
+
+model Subscription {
+  id                   String       @id @default(cuid())
+  organizationId       String       @unique
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  status               String       @default("INACTIVE")
+  trialEndsAt          DateTime?
+  currentPeriodEndsAt  DateTime?
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+}
+
+model BudActionLog {
+  id                String        @id @default(cuid())
+  organizationId    String?
+  initiatedByUserId String?
+  actionType        String
+  targetEntity      String?
+  commandText       String
+  status            String        @default("DRAFT")
+  requiresApproval  Boolean       @default(true)
+  approvedBy        String?
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  initiatedByUser   User?         @relation("BudActionUser", fields: [initiatedByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime      @default(now())
+}
